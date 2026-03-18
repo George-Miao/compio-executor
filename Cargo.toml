@@ -4,11 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bitflags = "2.11.0"
 compio-log = "0.1.0"
 crossfire = "3.1.5"
-pin-project-lite = "0.2.17"
-thin-cell = "0.2.0"
+slotmap = "1.1.1"
 
 [dev-dependencies]
 compio-log = { version = "0.1.0", features = ["enable_log"] }

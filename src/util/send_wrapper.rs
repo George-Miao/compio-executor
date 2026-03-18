@@ -1,35 +1,9 @@
 use std::{
-    cell::Cell,
-    mem::{self, ManuallyDrop},
-    process::abort,
-    thread::{self, ThreadId},
+    mem::{ManuallyDrop, needs_drop},
+    thread::{ThreadId, panicking},
 };
 
-pub(crate) struct Bomb;
-
-impl Drop for Bomb {
-    fn drop(&mut self) {
-        abort();
-    }
-}
-
-/// Calls a function and aborts if it panics.
-///
-/// This is useful in unsafe code where we can't recover from panics.
-pub(crate) fn abort_on_panic<T>(f: impl FnOnce() -> T) -> T {
-    let bomb = Bomb;
-    let t = f();
-    mem::forget(bomb);
-    t
-}
-
-pub fn current_id() -> ThreadId {
-    std::thread_local! {
-        static THREAD_ID: Cell<ThreadId> = Cell::new(std::thread::current().id())
-    };
-
-    THREAD_ID.get()
-}
+use crate::util::current_id;
 
 /// A wrapper that copied from `send_wrapper` crate, with our own optimizations.
 pub struct SendWrapper<T> {
@@ -91,7 +65,7 @@ impl<T> Drop for SendWrapper<T> {
     fn drop(&mut self) {
         // If the drop is trivial (`needs_drop` = false), then dropping `T` can't access
         // it and so it can be safely dropped on any thread.
-        if !mem::needs_drop::<T>() || self.valid() {
+        if !needs_drop::<T>() || self.valid() {
             unsafe {
                 // Drop the inner value
                 //
@@ -114,7 +88,7 @@ fn invalid_drop() {
     const DROP_ERROR: &str = "Dropped SendWrapper<T> variable from a thread different to the one \
                               it has been created with.";
 
-    if !thread::panicking() {
+    if !panicking() {
         // panic because of dropping from wrong thread
         // only do this while not unwinding (could be caused by deref from wrong thread)
         panic!("{}", DROP_ERROR)

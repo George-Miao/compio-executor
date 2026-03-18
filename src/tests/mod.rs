@@ -65,8 +65,8 @@ fn test_executor_runs_to_completion() {
             })
         };
 
-        let ra = a.await.0.unwrap();
-        let rb = b.await.0.unwrap();
+        let ra = a.await.unwrap();
+        let rb = b.await.unwrap();
 
         assert_eq!(ra, 10);
         assert_eq!(rb, 20);
@@ -89,7 +89,7 @@ fn test_cancel_before_poll_returns_canceled() {
         });
 
         handle.cancel();
-        let res = handle.await.0;
+        let res = handle.await;
         assert!(matches!(res, Err(JoinError::Canceled)));
         assert!(
             !hit.get(),
@@ -119,7 +119,7 @@ fn test_cancel_during_execution_returns_canceled() {
         }
 
         handle.cancel();
-        let res = handle.await.0;
+        let res = handle.await;
         assert!(matches!(res, Err(JoinError::Canceled)));
         assert!(
             !done.get(),
@@ -155,29 +155,6 @@ fn test_join_handle_drop_cancels_task() {
 }
 
 #[test]
-fn test_panic_is_captured_in_join_error() {
-    block_on(async {
-        let handle = spawn(async move {
-            panic!("intentional panic from task");
-        });
-
-        let res = handle.await.0;
-        match res {
-            Err(JoinError::Panicked(payload)) => {
-                if let Some(msg) = payload.downcast_ref::<&'static str>() {
-                    assert_eq!(*msg, "intentional panic from task");
-                } else if let Some(msg) = payload.downcast_ref::<String>() {
-                    assert_eq!(msg, "intentional panic from task");
-                } else {
-                    panic!("unexpected panic payload type");
-                }
-            }
-            _ => panic!("expected panicked join error"),
-        }
-    });
-}
-
-#[test]
 fn test_detach_allows_task_to_continue() {
     block_on(async {
         let completed = std::rc::Rc::new(Cell::new(false));
@@ -190,7 +167,7 @@ fn test_detach_allows_task_to_continue() {
             completed_task.set(true);
         });
 
-        handle.detact();
+        handle.detach();
 
         for _ in 0..10 {
             yield_now().await;
@@ -218,8 +195,53 @@ fn test_multiple_cancels_are_idempotent() {
         handle.cancel();
         handle.cancel();
 
-        let res = handle.await.0;
+        let res = handle.await;
         assert!(matches!(res, Err(JoinError::Canceled)));
         assert!(!ran.get(), "task should not run after repeated cancels");
+    });
+}
+
+#[test]
+fn test_panic_does_not_affect_other_tasks() {
+    block_on(async {
+        let run_count = std::rc::Rc::new(Cell::new(0));
+        let run_count_task = run_count.clone();
+
+        // This task will panic. We detach it so we aren't waiting on it specifically,
+        // but we want to make sure the executor keeps ticking.
+        spawn(async {
+            panic!("intentional panic");
+        })
+        .detach();
+
+        // Give the panicked task a chance to run and panic.
+        let handle = spawn(async move {
+            for _ in 0..5 {
+                yield_now().await;
+            }
+            run_count_task.set(run_count_task.get() + 1);
+        });
+
+        handle.await.unwrap();
+        assert_eq!(run_count.get(), 1);
+    });
+}
+
+#[test]
+fn test_join_result_resume_unwind() {
+    block_on(async {
+        let handle: JoinHandle<()> = spawn(async {
+            panic!("resume_unwind panic");
+        });
+
+        let JoinError::Panicked(res) = handle.await.unwrap_err() else {
+            unreachable!("Future panicked")
+        };
+
+        let Some(msg) = res.downcast_ref::<&'static str>() else {
+            unreachable!("Panic payload should be a static string")
+        };
+
+        assert_eq!(*msg, "resume_unwind panic");
     });
 }
