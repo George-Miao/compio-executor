@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     panic::{AssertUnwindSafe, catch_unwind},
     pin::Pin,
     task::{Context, Poll},
@@ -6,15 +7,39 @@ use std::{
 
 use crate::{PanicResult, queue::Waker, util::Sender};
 
+/// Type-erased [`Concrete`]
+pub trait Pollable: Debug {
+    fn poll(self: Box<Self>) -> Option<Box<dyn Pollable>>;
+}
+
+#[repr(transparent)]
 pub struct Task {
     poll: Option<Box<dyn Pollable>>,
 }
+
+impl Debug for Task {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Task").field(&self.poll).finish()
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<Task>() == 2 * std::mem::size_of::<usize>());
 
 struct Concrete<F: Future> {
     future: F,
     tx: Sender<PanicResult<F::Output>>,
     waker: std::task::Waker,
     _marker: std::marker::PhantomData<*const ()>,
+}
+
+impl<F: Future> Debug for Concrete<F> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Concrete")
+            .field("future", &"<..>")
+            .field("tx", &self.tx as _)
+            .field("waker", &self.waker as _)
+            .finish()
+    }
 }
 
 impl Task {
@@ -47,11 +72,6 @@ impl<F: Future> Concrete<F> {
             _marker: std::marker::PhantomData,
         }
     }
-}
-
-/// Type-erased `Concrete`
-pub trait Pollable {
-    fn poll(self: Box<Self>) -> Option<Box<dyn Pollable>>;
 }
 
 impl<F: Future + 'static> Pollable for Concrete<F> {

@@ -1,4 +1,5 @@
 use std::{
+    fmt::Debug,
     mem::{ManuallyDrop, needs_drop},
     thread::{ThreadId, panicking},
 };
@@ -7,7 +8,7 @@ use crate::util::current_id;
 
 /// A wrapper that copied from `send_wrapper` crate, with our own optimizations.
 pub struct SendWrapper<T> {
-    data: ManuallyDrop<T>,
+    value: ManuallyDrop<T>,
     thread_id: ThreadId,
 }
 
@@ -16,7 +17,7 @@ impl<T> SendWrapper<T> {
     /// The wrapper takes ownership of the value.
     pub fn new(data: T) -> SendWrapper<T> {
         SendWrapper {
-            data: ManuallyDrop::new(data),
+            value: ManuallyDrop::new(data),
             thread_id: current_id(),
         }
     }
@@ -33,12 +34,26 @@ impl<T> SendWrapper<T> {
     ///
     /// The caller should be in the same thread as the creator.
     pub unsafe fn get_unchecked(&self) -> &T {
-        &self.data
+        &self.value
     }
 
     /// Returns a reference to the contained value, if valid.
     pub fn get(&self) -> Option<&T> {
-        if self.valid() { Some(&self.data) } else { None }
+        if self.valid() {
+            Some(&self.value)
+        } else {
+            None
+        }
+    }
+}
+
+impl<T: Debug> Debug for SendWrapper<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = self.get().map(|v| v as &dyn Debug).unwrap_or(&"<invalid>");
+        f.debug_struct("SendWrapper")
+            .field("value", value)
+            .field("thread_id", &self.thread_id)
+            .finish()
     }
 }
 
@@ -73,7 +88,7 @@ impl<T> Drop for SendWrapper<T> {
                 // - We've just checked that it's valid to drop `T` on this thread
                 // - We only move out from `self.data` here and in drop, so `self.data` is
                 //   present
-                ManuallyDrop::drop(&mut self.data);
+                ManuallyDrop::drop(&mut self.value);
             }
         } else {
             invalid_drop()

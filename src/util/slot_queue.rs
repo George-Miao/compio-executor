@@ -1,4 +1,4 @@
-use std::cell::UnsafeCell;
+use std::{cell::UnsafeCell, fmt::Debug};
 
 use slotmap::{Key, SlotMap};
 
@@ -7,18 +7,31 @@ pub struct SlotQueue<K: Key, V> {
     _marker: std::marker::PhantomData<*const ()>,
 }
 
+impl<K: Key + Debug, V: Debug> Debug for SlotQueue<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let inner = unsafe { self.get_inner() };
+        f.debug_struct("SlotQueue")
+            .field("map", &inner.map)
+            .field("hot", &inner.hot)
+            .field("cold", &inner.cold)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 struct Inner<K: Key, V> {
     map: SlotMap<K, Item<K, V>>,
     hot: List<K>,
     cold: List<K>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 struct List<K> {
     head: Option<K>,
     tail: Option<K>,
 }
 
+#[derive(Debug)]
 struct Item<K, V> {
     prev: Option<K>,
     next: Option<K>,

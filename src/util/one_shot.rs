@@ -1,5 +1,6 @@
 use std::{
     cell::UnsafeCell,
+    fmt::{self, Debug},
     mem::MaybeUninit,
     ptr::NonNull,
     sync::atomic::{AtomicU8, Ordering::*},
@@ -30,15 +31,46 @@ pub struct Receiver<T> {
     inner: NonNull<Inner<T>>,
 }
 
+struct Inner<T> {
+    state: AtomicU8,
+    value: UnsafeCell<MaybeUninit<T>>,
+    waker: UnsafeCell<MaybeUninit<Waker>>,
+}
+
 impl<T> Unpin for Sender<T> {}
 impl<T> Unpin for Receiver<T> {}
 
 unsafe impl<T: Send> Send for Receiver<T> {}
 
-struct Inner<T> {
-    state: AtomicU8,
-    value: UnsafeCell<MaybeUninit<T>>,
-    waker: UnsafeCell<MaybeUninit<Waker>>,
+impl<T> Debug for Sender<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Sender")
+            .field(unsafe { self.inner.as_ref() })
+            .finish()
+    }
+}
+
+impl<T> Debug for Receiver<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Receiver")
+            .field(unsafe { self.inner.as_ref() })
+            .finish()
+    }
+}
+
+impl<T> Debug for Inner<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = self.state.load(Relaxed);
+
+        f.debug_struct("Inner")
+            .field("type", &std::any::type_name::<T>())
+            .field("locked", &(state & LOCKED != 0))
+            .field("closed", &(state & CLOSED != 0))
+            .field("canceled", &(state & CANCELED != 0))
+            .field("waker_set", &(state & WAKER_SET != 0))
+            .field("value_set", &(state & VALUE_SET != 0))
+            .finish()
+    }
 }
 
 impl<T> Inner<T> {
@@ -127,13 +159,11 @@ impl<T> Inner<T> {
     }
 
     fn poll(&self, cx: &mut Context<'_>) -> Poll<Option<T>> {
-        let mut guard = self.lock_anyway(None);
+        let Some(mut guard) = self.lock() else {
+            return Poll::Ready(None);
+        };
 
         if guard.state & VALUE_SET == 0 {
-            if guard.state & CLOSED != 0 {
-                return Poll::Ready(None);
-            }
-
             let waker_set = guard.state & WAKER_SET == WAKER_SET;
 
             if waker_set {
@@ -154,7 +184,9 @@ impl<T> Inner<T> {
 
             if guard.state & VALUE_SET != 0 {
                 // Value set during cloning
-                return Poll::Ready(Some(unsafe { (*self.value.get()).assume_init_read() }));
+                let value = unsafe { (*self.value.get()).assume_init_read() };
+                guard.state &= !VALUE_SET;
+                return Poll::Ready(Some(value));
             }
 
             if waker_set {

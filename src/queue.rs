@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    fmt::Debug,
     mem::ManuallyDrop,
     sync::{Arc, Weak},
     task::{RawWaker, RawWakerVTable},
@@ -16,6 +17,7 @@ use crate::{
 
 new_key_type! { pub struct TaskId; }
 
+#[derive(Debug)]
 struct Shared {
     queue: SendWrapper<SlotQueue<TaskId, Task>>,
     sync_tx: MTx<Array<TaskId>>,
@@ -27,7 +29,15 @@ pub struct TaskQueue {
     _marker: std::marker::PhantomData<*const ()>,
 }
 
-#[derive(Debug)]
+impl Debug for TaskQueue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TaskQueue")
+            .field("shared", &self.shared)
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Handle {
     id: TaskId,
     shared: Weak<Shared>,
@@ -61,10 +71,10 @@ impl TaskQueue {
         }
     }
 
-    pub fn waker(&self, id: TaskId) -> Waker {
+    pub fn waker(&self, id: TaskId, extra: Option<Box<dyn Any>>) -> Waker {
         let inner = WakerInner {
             handle: self.handle(id),
-            extra: None,
+            extra,
         };
         Waker(Arc::new(inner))
     }
@@ -89,12 +99,15 @@ impl TaskQueue {
         }
     }
 
-    pub fn push<F: Future + 'static>(&self, fut: F) -> (TaskId, Receiver<PanicResult<F::Output>>) {
+    pub fn push<F: Future + 'static>(
+        &self,
+        fut: F,
+        extra: Option<Box<dyn Any>>,
+    ) -> (TaskId, Receiver<PanicResult<F::Output>>) {
         let (tx, rx) = oneshot();
         let id = self.queue().push_back_with(|id| {
-            let waker = self.waker(id);
-            let task = Task::new(fut, tx, waker);
-            task
+            let waker = self.waker(id, extra);
+            Task::new(fut, tx, waker)
         });
         (id, rx)
     }
@@ -189,6 +202,10 @@ impl Waker {
 
     pub fn into_std(self) -> std::task::Waker {
         unsafe { std::task::Waker::new(Arc::into_raw(self.0) as _, Self::VTABLE) }
+    }
+
+    pub fn extra(&self) -> Option<&dyn Any> {
+        self.0.extra.as_deref()
     }
 }
 

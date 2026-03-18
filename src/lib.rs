@@ -19,29 +19,32 @@ mod task;
 mod tests;
 mod util;
 
-pub use queue::WakerExt;
+pub use queue::{Waker, WakerExt};
 
 pub(crate) type Panic = Box<dyn Any + Send + 'static>;
 pub(crate) type PanicResult<T> = Result<T, Panic>;
 
+#[derive(Debug)]
 pub struct Executor {
     queue: TaskQueue,
     config: ExecutorConfig,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct ExecutorConfig {
     sync_queue_size: usize,
     local_queue_size: usize,
     max_interval: u32,
+    extra: Option<fn() -> Box<dyn Any>>,
 }
 
 impl Default for ExecutorConfig {
     fn default() -> Self {
         Self {
             sync_queue_size: 64,
-            local_queue_size: 64,
+            local_queue_size: 63,
             max_interval: 32,
+            extra: None,
         }
     }
 }
@@ -79,7 +82,7 @@ impl Executor {
     }
 
     pub fn spawn<F: Future + 'static>(&self, f: F) -> JoinHandle<F::Output> {
-        let (id, rx) = self.queue.push(f);
+        let (id, rx) = self.queue.push(f, self.config.extra.map(|f| f()));
 
         JoinHandle {
             handle: self.queue.handle(id),
